@@ -10,8 +10,8 @@
 
 ## What This Solves
 
-✅ Credentials **never stored in ServiceNow** — resolved live from vault at discovery time  
-✅ **One JAR, all customers** — no per-customer rebuilds  
+✅ Credentials **never stored in ServiceNow**: resolved live from vault at discovery time  
+✅ **One JAR, all customers** : no per-customer rebuilds  
 ✅ **Five vault backends** with full auth method coverage  
 ✅ **Token caching** prevents vault thundering-herd  
 
@@ -42,7 +42,7 @@ JAR file:     sn-universal-credential-resolver-1.0.0.jar
 
 ### 3. Configure MID Server
 
-**MID Server → Properties** — add minimum properties:
+**MID Server → Properties** add minimum properties:
 
 ```properties
 mid.external_credentials.vault.type       = hashicorp | cyberark | azure_kv | aws_sm | delinea
@@ -154,7 +154,7 @@ Add to MID Server `agent/config.xml`:
 <parameter name="mid.log.level" value="debug"/>
 ```
 
-🔒 **Security:** Debug logs do NOT emit credential values — only metadata.
+🔒 **Security:** Debug logs do NOT emit credential values only metadata.
 
 **→ For full troubleshooting guide & extension instructions, see Guide Section 5**
 
@@ -235,7 +235,7 @@ sn-universal-credential-resolver/
 
 ## Next Steps
 
-1. **Read the Full Guide** → `SN-Universal-Credential-Resolver-Technical-Guide.md`
+1. **Read the Full Guide** → `Universal-Credential-Resolver-Technical-Guide.md`
    - Section 1: Problem Statement & Business Impact
    - Section 2: Solution Architecture
    - Section 3: Configuration Reference (all backends, all properties)
@@ -258,6 +258,3 @@ sn-universal-credential-resolver/
 - **Adding a vault backend** → Guide Section 5.2
 
 ---
-
-**Classification:** Internal | **Version:** 1.0.0 | **Author:** Platform Architecture | CEG APAC  
-**Status:** APPROVED FOR DEPLOYMENT
