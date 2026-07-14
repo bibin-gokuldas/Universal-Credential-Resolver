@@ -1,207 +1,263 @@
 # ServiceNow Universal External Credential Resolver
-**Version:** 1.0.0  
-**Compatibility:** ServiceNow Vancouver / Washington / Xanadu / Yokohama / Zurich / Australia  
-**Java:** 11+
+
+**Version 1.0.0** | **Status:** APPROVED FOR DEPLOYMENT  
+**Maven:** `com.servicenow.mid:sn-universal-credential-resolver:1.0.0`  
+**Compatibility:** ServiceNow Vancouver → Australia (all current releases) | **Java:** 11+ (LTS)
+
+> 📖 **For complete documentation, see:** `SN-Universal-Credential-Resolver-Technical-Guide.md`
+
+---
+
+## What This Solves
+
+✅ Credentials **never stored in ServiceNow** — resolved live from vault at discovery time  
+✅ **One JAR, all customers** — no per-customer rebuilds  
+✅ **Five vault backends** with full auth method coverage  
+✅ **Token caching** prevents vault thundering-herd  
+
+**→ For full problem statement & impact analysis, see Guide Section 1**
+
+---
+
+## Quick Start (5 Minutes)
+
+### 1. Build the JAR
+
+```bash
+./build.sh /opt/servicenow/mid/agent/lib/agent.jar
+# Output: target/sn-universal-credential-resolver-1.0.0.jar
+```
+
+**→ For detailed build steps with prerequisites, see Guide Section 4 (Steps 1–5)**
+
+### 2. Upload to ServiceNow
+
+**Discovery → Credential Stores → External Credential Stores → New**
+
+```
+Name:         Universal Credential Resolver
+Java class:   com.servicenow.mid.credentials.UniversalCredentialResolver
+JAR file:     sn-universal-credential-resolver-1.0.0.jar
+```
+
+### 3. Configure MID Server
+
+**MID Server → Properties** — add minimum properties:
+
+```properties
+mid.external_credentials.vault.type       = hashicorp | cyberark | azure_kv | aws_sm | delinea
+mid.external_credentials.vault.url        = https://vault.corp.example.com
+mid.external_credentials.vault.auth_method= token | approle | azure_mi | aws_iam | mtls
+```
+
+**→ For all properties by backend, see Guide Section 3**
+
+### 4. Create Vault Secret & SN Credential
+
+Store secret in vault with standard field names (resolver uses alias-based matching).
+
+Create SN credential record pointing to vault path (`credential_id` format varies by backend).
+
+**→ For field naming conventions & credential_id formats, see Guide Section 4 Steps 8–9**
+
+### 5. Validate
+
+Run Quick Discovery against a test host. Check MID Server log for:
+
+```
+[INFO] Credential resolved successfully: provider=HashiCorp Vault, type=USERNAME_PASSWORD
+```
+
+**→ For full validation walkthrough, see Guide Section 4 Step 11**
+
+---
+
+## Supported Backends
+
+| Backend | `vault.type` | Auth Methods |
+|---------|---|---|
+| HashiCorp Vault | `hashicorp` | Static Token, AppRole, mTLS |
+| CyberArk CCP | `cyberark` | mTLS, Bearer Token |
+| Azure Key Vault | `azure_kv` | Managed Identity, Service Principal |
+| AWS Secrets Manager | `aws_sm` | IAM Instance Role (IMDSv2), Static credentials |
+| Delinea Secret Server | `delinea` | OAuth2 Password Grant, mTLS |
+
+**→ For auth method details & secret format examples, see Guide Section 2.3 & 4 Step 8**
+
+---
+
+## Configuration Examples
+
+### HashiCorp Vault + AppRole
+
+```properties
+mid.external_credentials.vault.type         = hashicorp
+mid.external_credentials.vault.url          = https://vault.corp.example.com
+mid.external_credentials.vault.auth_method  = approle
+mid.external_credentials.vault.role_id      = my-role-id
+mid.external_credentials.vault.secret_id    = my-secret-id
+mid.external_credentials.vault.mount_path   = secret
+mid.external_credentials.vault.kv_version   = 2
+```
+
+### CyberArk CCP + mTLS
+
+```properties
+mid.external_credentials.vault.type         = cyberark
+mid.external_credentials.vault.url          = https://cyberark.corp.example.com
+mid.external_credentials.vault.auth_method  = mtls
+mid.external_credentials.vault.mtls_cert    = /etc/mid/client.pem
+mid.external_credentials.vault.mtls_key     = /etc/mid/client.key
+```
+
+### AWS Secrets Manager + IAM Role
+
+```properties
+mid.external_credentials.vault.type         = aws_sm
+mid.external_credentials.vault.url          = https://secretsmanager.ap-southeast-1.amazonaws.com
+mid.external_credentials.vault.auth_method  = aws_iam
+mid.external_credentials.aws.region         = ap-southeast-1
+```
+
+### Azure Key Vault + Managed Identity
+
+```properties
+mid.external_credentials.vault.type         = azure_kv
+mid.external_credentials.vault.url          = https://my-vault.vault.azure.net
+mid.external_credentials.vault.auth_method  = azure_mi
+```
+
+**→ For complete property reference covering ALL backends, see Guide Section 3**
+
+---
+
+## Error Reference
+
+| Code | Cause | Action |
+|---|---|---|
+| `CONFIGURATION_ERROR` | Missing MID property | Check **MID Server → Properties**; restart |
+| `VAULT_AUTH_FAILED` | Wrong token/AppRole/cert | Verify credentials; check vault audit logs |
+| `SECRET_NOT_FOUND` | Path doesn't exist | Confirm path exists in vault |
+| `MISSING_SECRET_FIELD` | Required field missing | Add missing field to vault secret |
+| `VAULT_UNAVAILABLE` | Network/TLS issue | Check connectivity & CA cert trust |
+| `PARSE_ERROR` | Unexpected vault response | Check vault version; enable DEBUG logging |
+
+**→ For full error code table with detailed resolutions, see Guide Section 5**
+
+---
+
+## Enable Debug Logging
+
+Add to MID Server `agent/config.xml`:
+
+```xml
+<parameter name="mid.log.level" value="debug"/>
+```
+
+🔒 **Security:** Debug logs do NOT emit credential values — only metadata.
+
+**→ For full troubleshooting guide & extension instructions, see Guide Section 5**
+
+---
+
+## Security Highlights
+
+**Built-in (by design):**
+- Credentials never stored in SN
+- Credentials never logged
+- Token caching at 80% TTL (credential values never cached)
+- Classpath isolation (all deps shaded)
+- mTLS support
+- Exponential backoff on transient failures
+
+**Customer-configured:**
+- Least-privilege vault roles
+- MID host key hardening (`chmod 400`)
+- Network segmentation
+- Vault audit logging
+- Secret rotation (quarterly)
+
+**→ For complete security controls matrix, see Guide Section 6**
 
 ---
 
 ## Architecture
 
 ```
-ServiceNow Instance
-      │  credential record (type, credential_id, user_name)
-      ▼
-MID Server (JVM)
-      │  calls IExternalCredential.resolve()
-      ▼
-┌─────────────────────────────────────────────────────┐
-│       UniversalCredentialResolver                   │
-│  ┌──────────────┐  ┌────────────────┐               │
-│  │ VaultConfig  │  │  CredentialMapper│              │
-│  │ (from MID    │  │  (type → SN    │               │
-│  │  properties) │  │   key map)     │               │
-│  └──────────────┘  └────────────────┘               │
-│           │                                         │
-│  ┌─────────────────────────────────────────────┐    │
-│  │           VaultProviderFactory               │    │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐    │    │
-│  │  │HashiCorp │ │CyberArk  │ │Azure KV  │    │    │
-│  │  │Provider  │ │Provider  │ │Provider  │    │    │
-│  │  └──────────┘ └──────────┘ └──────────┘    │    │
-│  │  ┌──────────┐ ┌──────────┐                 │    │
-│  │  │AWS SM    │ │Delinea   │                 │    │
-│  │  │Provider  │ │Provider  │                 │    │
-│  │  └──────────┘ └──────────┘                 │    │
-│  └─────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────┘
-      │  VaultHttpClient (OkHttp + SigV4 + mTLS)
-      ▼
- Vault Backend (HashiCorp / CyberArk / Azure KV / AWS SM / Delinea)
+SN Instance → MID Server JVM → Vault Backend
+                ├─ UniversalCredentialResolver
+                ├─ VaultConfig (from MID props)
+                ├─ VaultProviderFactory
+                ├─ VaultHttpClient (retry/mTLS)
+                └─ CredentialMapper (type → SN keys)
+```
+
+**→ For full architecture diagram & component details, see Guide Section 2.2**
+
+---
+
+## FAQ
+
+**Q: Can I use different vaults for different customers?**  
+A: Yes. Each MID Server configured with ONE vault backend. For multiple vaults, deploy separate MID Servers.
+
+**Q: Are credentials cached?**  
+A: NO — credential values never cached. Only auth tokens cached at 80% TTL.
+
+**Q: What if vault is down?**  
+A: Discovery fails with `VAULT_UNAVAILABLE`. Resolver retries transient failures. Reschedule discovery when vault online.
+
+**Q: Can I override the username from vault?**  
+A: Yes. Populate **Username** field in SN credential record.
+
+**→ For complete FAQ, see Guide Section 4 (bottom) & comprehensive FAQs**
+
+---
+
+## Project Structure
+
+```
+sn-universal-credential-resolver/
+├── pom.xml                              (Maven build)
+├── build.sh                             (One-command build)
+├── README.md                            (This file)
+├── src/main/java/.../credentials/
+│   ├── UniversalCredentialResolver.java (SPI entry point)
+│   ├── config/VaultConfig.java
+│   ├── core/ (VaultProvider, VaultProviderFactory, exceptions)
+│   ├── model/ (ResolvedCredential DTO)
+│   ├── providers/ (5 vault backends)
+│   └── util/ (VaultHttpClient, CredentialMapper)
+└── src/test/java/.../CredentialMapperTest.java (20+ unit tests)
 ```
 
 ---
 
-## Supported Vault Backends
+## Next Steps
 
-| Backend | `vault.type` value | Auth Methods Supported |
-|---|---|---|
-| HashiCorp Vault | `hashicorp` | Static Token, AppRole, mTLS cert auth |
-| CyberArk CCP | `cyberark` | mTLS client cert, Bearer token |
-| Azure Key Vault | `azure_kv` | Managed Identity (IMDS), Service Principal |
-| AWS Secrets Manager | `aws_sm` | IAM Instance Role (IMDSv2), Static credentials |
-| Delinea Secret Server | `delinea` | Password grant (OAuth2), mTLS |
+1. **Read the Full Guide** → `SN-Universal-Credential-Resolver-Technical-Guide.md`
+   - Section 1: Problem Statement & Business Impact
+   - Section 2: Solution Architecture
+   - Section 3: Configuration Reference (all backends, all properties)
+   - Section 4: Developer Guide (11-step deployment walkthrough)
+   - Section 5: Troubleshooting & Extension
+   - Section 6: Security Controls
 
-## Supported Credential Types
+2. **Follow Steps 1–11** in Guide Section 4 for complete deployment
 
-| SN Type | Vault Keys Expected | Notes |
-|---|---|---|
-| `ssh_password`, `snmp`, `basic` | `username`, `password` | Default mapping |
-| `ssh_private_key` | `ssh_private_key`, `username`, `ssh_passphrase` | `ssh_passphrase` optional |
-| `windows`, `ntlm` | `username`, `password`, `windows_domain` | `domain` optional |
-| `api_key`, `bearer` | `api_key` or `token` or `access_token` | Multiple aliases |
-| `azure_sp`, `service_principal` | `client_id`, `client_secret`, `tenant_id` | `tenant_id` optional override |
+3. **Extend with New Vault** → Guide Section 5.2 (implement `VaultProvider` interface)
 
 ---
 
-## Build
+## Support
 
-```bash
-# Prerequisites: Java 11+, Maven 3.8+, agent.jar from your MID Server
-./build.sh /opt/servicenow/mid/agent/lib/agent.jar
-
-# Output: target/sn-universal-credential-resolver-1.0.0.jar
-```
-
----
-
-## ServiceNow Registration
-
-1. Navigate to **Discovery → Credential Stores → External Credential Stores**
-2. Click **New**
-3. Fill in:
-   - **Name:** `Universal Credential Resolver`
-   - **Java class name:** `com.servicenow.mid.credentials.UniversalCredentialResolver`
-   - **JAR file attachment:** Upload `sn-universal-credential-resolver-1.0.0.jar`
-4. Save and **Distribute to all MID Servers**
+- **Configuration issues** → Guide Section 3 (property reference)
+- **Build/Deployment** → Guide Section 4 (steps 1–11)
+- **Error codes** → Guide Section 5 (error table + solutions)
+- **Security review** → Guide Section 6 (controls matrix + checklists)
+- **Adding a vault backend** → Guide Section 5.2
 
 ---
 
-## MID Server System Properties
-
-Configure via **MID Server → Properties** or `config.xml`.
-
-### Common (Required for all vault types)
-
-| Property | Description | Example |
-|---|---|---|
-| `mid.external_credentials.vault.type` | Vault backend | `hashicorp` |
-| `mid.external_credentials.vault.url` | Vault base URL | `https://vault.corp.example.com` |
-| `mid.external_credentials.vault.auth_method` | Auth method | `approle` |
-| `mid.external_credentials.vault.timeout_ms` | HTTP timeout (default: 10000) | `15000` |
-| `mid.external_credentials.vault.retry_count` | Retry attempts (default: 3) | `3` |
-
-### HashiCorp Vault
-
-| Property | Description |
-|---|---|
-| `mid.external_credentials.vault.namespace` | Enterprise namespace (optional) |
-| `mid.external_credentials.vault.token` | Static token (auth_method=token) |
-| `mid.external_credentials.vault.role_id` | AppRole role_id |
-| `mid.external_credentials.vault.secret_id` | AppRole secret_id |
-| `mid.external_credentials.vault.mount_path` | KV mount (default: `secret`) |
-| `mid.external_credentials.vault.kv_version` | KV version: `1` or `2` (default: `2`) |
-
-### mTLS (all backends)
-
-| Property | Description |
-|---|---|
-| `mid.external_credentials.vault.mtls_cert` | Path to PEM client certificate |
-| `mid.external_credentials.vault.mtls_key` | Path to PKCS8 PEM private key |
-| `mid.external_credentials.vault.ca_cert` | Path to custom CA certificate (optional) |
-
-### AWS Secrets Manager
-
-| Property | Description |
-|---|---|
-| `mid.external_credentials.aws.region` | AWS region (default: `us-east-1`) |
-| `mid.external_credentials.vault.token` | `ACCESS_KEY:SECRET_KEY` for STATIC_TOKEN auth |
-
-### Azure Key Vault
-
-| Property | Description |
-|---|---|
-| `mid.external_credentials.azure.tenant_id` | Azure AD tenant ID |
-| `mid.external_credentials.azure.client_id` | SP client ID (STATIC_TOKEN auth) |
-| `mid.external_credentials.azure.client_secret` | SP client secret (STATIC_TOKEN auth) |
-
-### Delinea Secret Server
-
-| Property | Description |
-|---|---|
-| `mid.external_credentials.vault.role_id` | Username for OAuth2 password grant |
-| `mid.external_credentials.vault.secret_id` | Password for OAuth2 password grant |
-
----
-
-## Credential Record Configuration
-
-| Field | Value |
-|---|---|
-| **Type** | Any SN credential type |
-| **Credential ID** | Vault-specific path/name (see below) |
-| **External Store** | Universal Credential Resolver |
-| **Username** | Optional hint (overrides vault-returned username) |
-
-### credential_id Formats
-
-| Vault | Format | Example |
-|---|---|---|
-| HashiCorp KV v2 | Secret path (no `/data/` prefix) | `prod/linux/root` |
-| HashiCorp KV v1 | Mount-relative path | `secret/prod/linux` |
-| CyberArk | `AppID\|Safe\|ObjectName` | `MIDApp\|Linux-Prod\|root-server01` |
-| Azure KV | Secret name (or name/version) | `prod-linux-password` |
-| AWS SM | Secret name or ARN | `prod/linux/root` |
-| Delinea | Numeric ID or secret path | `42` or `/Linux/prod/root` |
-
----
-
-## Multi-Value Secrets (Structured Credentials)
-
-For credential types requiring multiple fields (SSH key, Windows, Azure SP),
-store the secret as a JSON object in the vault:
-
-**HashiCorp KV v2 example:**
-```json
-{
-  "username": "root",
-  "ssh_private_key": "-----BEGIN PRIVATE KEY-----\n...",
-  "ssh_passphrase": "optional"
-}
-```
-
-**AWS SM / Azure KV** (store JSON string as secret value):
-```json
-{
-  "client_id": "aaa-bbb-ccc",
-  "client_secret": "my-secret",
-  "tenant_id": "xxx-yyy-zzz"
-}
-```
-
----
-
-## Security Notes
-
-1. **Token caching** — AppRole, Managed Identity, and SP tokens are cached in-memory at 80% of their TTL. No credential values are ever cached.
-2. **mTLS key storage** — Store client keys on the MID Server host with file permissions `400` owned by the MID Server service account.
-3. **Classpath isolation** — All third-party dependencies (OkHttp, Jackson) are shaded under `com.servicenow.mid.shaded.*` to prevent conflicts with existing MID Server libraries.
-4. **Secrets in logs** — Credential values are NEVER logged. Only metadata (provider name, credential type, user name) appears in logs.
-
----
-
-## Extending with a New Vault
-
-1. Implement `VaultProvider` in `com.servicenow.mid.credentials.providers`
-2. Add your `VaultType` enum value to `VaultConfig.VaultType`
-3. Register in `VaultProviderFactory` constructor
-4. Rebuild and redeploy the JAR
+**Classification:** Internal | **Version:** 1.0.0 | **Author:** Platform Architecture | CEG APAC  
+**Status:** APPROVED FOR DEPLOYMENT
