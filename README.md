@@ -4,7 +4,7 @@
 **Maven:** `com.servicenow.mid:sn-universal-credential-resolver:1.0.0`  
 **Compatibility:** ServiceNow Vancouver → Australia (all current releases) | **Java:** 11+ (LTS)
 
-> 📖 **For complete documentation, see:** `SN-Universal-Credential-Resolver-Technical-Guide.md`
+> 📖 **For complete documentation, see:** `Universal-Credential-Resolver-Technical-Guide.md`
 
 ---
 
